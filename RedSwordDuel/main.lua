@@ -20,7 +20,7 @@ local ITEM_NAME = "ที่ฉาบปูน"
 local BUY_LOCATION = Vector3.new(422.701996, 25, -225.712997)
 local RECENT_COOLDOWN = 3.5
 
--- 📦 ตั้งค่าระบบส่งพัสดุ (อัปเดตพิกัดจุดรับใหม่แล้ว)
+-- 📦 ตั้งค่าระบบส่งพัสดุ
 local deliveryActive = false
 local PICKUP_LOCATION = Vector3.new(-298.8047790527344, 23.38964080810547, 36.00278854370117)
 local DROP_LOCATION = Vector3.new(-621.3425903320312, 22.04998779296875, -280.3482666015625)
@@ -176,14 +176,8 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 -- ==========================================
--- 3. Common Actions (เดิน / กดปุ่ม)
+-- 3. Smart Movement System (ปรับแก้การเดินค้าง + วิ่ง + เดินอ้อมฉลาดขึ้น)
 -- ==========================================
-local function triggerSprint()
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
-    task.wait(0.05)
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-end
-
 local function faceTarget(targetPosition)
     local character = player.Character
     if character and character:FindFirstChild("HumanoidRootPart") then
@@ -209,6 +203,7 @@ local function interactPrompt(target)
     end
 end
 
+-- ฟังก์ชันเดินอัจฉริยะ: กดเดินค้าง + กดวิ่ง (Shift) + หลบทางแคบ
 local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     local character = player.Character
     if not isCharacterAlive(character) then return false end
@@ -216,21 +211,43 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     local humanoid = character.Humanoid
     local rootPart = character.HumanoidRootPart
 
+    -- ปรับแต่งขนาดตัวการเดินทางเพื่อไม่ให้เข้าตรอก/ทางแคบเกินไป (AgentRadius กว้างขึ้น)
     local path = PathfindingService:CreatePath({
-        AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3
+        AgentRadius = 3.5,
+        AgentHeight = 6.0,
+        AgentCanJump = true,
+        WaypointSpacing = 4.0
     })
 
     local success = pcall(function() path:ComputeAsync(rootPart.Position, targetPosition) end)
 
     if success and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
-        triggerSprint()
+
+        -- กดปุ่ม Shift และ W ค้างไว้เพื่อวิ่ง
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+
+        local stopMovementKeys = function()
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+        end
 
         for _, waypoint in ipairs(waypoints) do
-            if not activeFlagCheck() or not isCharacterAlive(character) then return false end
-            if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
+            if not activeFlagCheck() or not isCharacterAlive(character) then 
+                stopMovementKeys()
+                return false 
+            end
 
+            -- กระโดดเมื่อถึงจุดที่ต้องโดด
+            if waypoint.Action == Enum.PathWaypointAction.Jump then 
+                humanoid.Jump = true 
+            end
+
+            -- หันหน้าไปทางจุดหมายจุดต่อไปเพื่อให้กด W เดินหน้าอย่างสมูท
+            faceTarget(waypoint.Position)
             humanoid:MoveTo(waypoint.Position)
+
             local lastPos = rootPart.Position
             local stuckTimer = 0
             local reached = false
@@ -239,37 +256,50 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
             local startTime = tick()
 
             while not reached and activeFlagCheck() and isCharacterAlive(character) do
-                task.wait(0.05)
+                task.wait(0.04)
                 if not rootPart then break end
-                
-                triggerSprint()
 
+                -- หันหน้าตรงไปทางเป้าหมายระหว่างเดิน
+                faceTarget(waypoint.Position)
+
+                -- ถ้าใกล้จุดปลายทางมากๆ ให้ผ่านได้ทันที
                 if (rootPart.Position - targetPosition).Magnitude <= 4.5 then
-                    connection:Disconnect()
+                    if connection.Connected then connection:Disconnect() end
+                    stopMovementKeys()
                     return true
                 end
 
-                if (rootPart.Position - lastPos).Magnitude < 0.15 then
-                    stuckTimer = stuckTimer + 0.05
+                -- ตรวจจับการติดขัด (Stuck Detection)
+                if (rootPart.Position - lastPos).Magnitude < 0.2 then
+                    stuckTimer = stuckTimer + 0.04
                 else
                     stuckTimer = 0
                     lastPos = rootPart.Position
                 end
 
-                if stuckTimer > 0.6 then
+                -- ถ้าติดขัดเกิน 0.5 วินาที ให้กระโดดและพยายามหลบออกข้าง
+                if stuckTimer > 0.5 then
                     humanoid.Jump = true
+                    -- เบี่ยงทิศทางเล็กน้อยเพื่อหลบมุมตึก/ทางแคบ
+                    rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(45), 0)
                     stuckTimer = 0
                 end
 
-                if tick() - startTime > 3.5 then
-                    connection:Disconnect()
+                -- ป้องกันการติด Loop นานเกินไปในแต่ละ Waypoint
+                if tick() - startTime > 3.0 then
+                    if connection.Connected then connection:Disconnect() end
                     break
                 end
             end
 
             if connection.Connected then connection:Disconnect() end
-            if rootPart and (rootPart.Position - targetPosition).Magnitude <= 4.5 then return true end
+            if rootPart and (rootPart.Position - targetPosition).Magnitude <= 4.5 then 
+                stopMovementKeys()
+                return true 
+            end
         end
+
+        stopMovementKeys()
     end
 
     return rootPart and (rootPart.Position - targetPosition).Magnitude <= 4.5
@@ -323,7 +353,7 @@ local function startDeliveryJob()
         local currentPackage = getPackageTool()
 
         if currentPackage then
-            -- 1. มีกล่องในตัว -> ถือกล่อง -> วิ่งไปส่ง
+            -- 1. ถือกล่อง -> วิ่งไปส่ง
             equipPackage()
             
             local reachedDrop = walkToWithPathfinding(DROP_LOCATION, function() return deliveryActive end)
@@ -334,7 +364,7 @@ local function startDeliveryJob()
                 task.wait(0.8)
             end
         else
-            -- 2. ไม่มีกล่อง -> วิ่งไปจุดรับใหม่ -> กดรับ -> วิ่งไปส่ง -> กดส่ง
+            -- 2. ไม่มีกล่อง -> วิ่งไปรับ -> กดรับ -> วิ่งไปส่ง -> กดส่ง
             local reachedPickUp = walkToWithPathfinding(PICKUP_LOCATION, function() return deliveryActive end)
             if reachedPickUp and deliveryActive then
                 faceTarget(PICKUP_LOCATION)
@@ -654,7 +684,7 @@ local function startAutoFarm()
                     local reached = walkToWithPathfinding(targetPos, function() return autoFarmActive end)
                     if reached and autoFarmActive then
                         faceTarget(targetPos); task.wait(0.08); interactPrompt(item)
-                        recentlyFarmed[item] = tick(); task.wait(0.15); triggerSprint(); task.wait(0.05)
+                        recentlyFarmed[item] = tick(); task.wait(0.15); task.wait(0.05)
                         break
                     end
                 end
@@ -671,7 +701,7 @@ end
 -- ==========================================
 local Window = Fluent:CreateWindow({
     Title = "Hi Hub",
-    SubTitle = "Pickup Updated",
+    SubTitle = "Smart Walk & Sprint Updated",
     TabWidth = 150,
     Size = UDim2.fromOffset(560, 400),
     Acrylic = false,
@@ -754,4 +784,4 @@ Tabs.Settings:AddButton({
 })
 
 Window:SelectTab(1)
-Fluent:Notify({Title = "Hi Hub Ready", Content = "แก้ไขพิกัดจุดรับใหม่เรียบร้อยครับ!", Duration = 5})
+Fluent:Notify({Title = "Hi Hub Ready", Content = "อัปเดตระบบเดินกดค้าง+วิ่ง+อ้อมสิ่งกีดขวางฉลาดขึ้นแล้วครับ!", Duration = 5})
