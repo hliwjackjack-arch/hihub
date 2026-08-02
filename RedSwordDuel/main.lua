@@ -176,7 +176,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 -- ==========================================
--- 3. Smart Movement System (ปรับแก้การเดินค้าง + วิ่ง + เดินอ้อมฉลาดขึ้น)
+-- 3. MoveTo + Hold Shift System (กด Shift ค้าง)
 -- ==========================================
 local function faceTarget(targetPosition)
     local character = player.Character
@@ -203,7 +203,6 @@ local function interactPrompt(target)
     end
 end
 
--- ฟังก์ชันเดินอัจฉริยะ: กดเดินค้าง + กดวิ่ง (Shift) + หลบทางแคบ
 local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     local character = player.Character
     if not isCharacterAlive(character) then return false end
@@ -211,7 +210,7 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     local humanoid = character.Humanoid
     local rootPart = character.HumanoidRootPart
 
-    -- ปรับแต่งขนาดตัวการเดินทางเพื่อไม่ให้เข้าตรอก/ทางแคบเกินไป (AgentRadius กว้างขึ้น)
+    -- ปรับรัศมีตัวละครเพื่อเดินอ้อมสิ่งกีดขวางให้กว้างขึ้น
     local path = PathfindingService:CreatePath({
         AgentRadius = 3.5,
         AgentHeight = 6.0,
@@ -224,30 +223,25 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     if success and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
 
-        -- กดปุ่ม Shift และ W ค้างไว้เพื่อวิ่ง
+        -- 🔥 กด Shift ค้างไว้ตลอดช่วงการเดินทาง
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
 
-        local stopMovementKeys = function()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+        local stopSprint = function()
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
         end
 
         for _, waypoint in ipairs(waypoints) do
             if not activeFlagCheck() or not isCharacterAlive(character) then 
-                stopMovementKeys()
+                stopSprint()
                 return false 
             end
 
-            -- กระโดดเมื่อถึงจุดที่ต้องโดด
             if waypoint.Action == Enum.PathWaypointAction.Jump then 
                 humanoid.Jump = true 
             end
 
-            -- หันหน้าไปทางจุดหมายจุดต่อไปเพื่อให้กด W เดินหน้าอย่างสมูท
-            faceTarget(waypoint.Position)
+            -- ใช้ MoveTo เดินตามคำสั่งปกติ
             humanoid:MoveTo(waypoint.Position)
-
             local lastPos = rootPart.Position
             local stuckTimer = 0
             local reached = false
@@ -256,37 +250,30 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
             local startTime = tick()
 
             while not reached and activeFlagCheck() and isCharacterAlive(character) do
-                task.wait(0.04)
+                task.wait(0.05)
                 if not rootPart then break end
 
-                -- หันหน้าตรงไปทางเป้าหมายระหว่างเดิน
-                faceTarget(waypoint.Position)
-
-                -- ถ้าใกล้จุดปลายทางมากๆ ให้ผ่านได้ทันที
                 if (rootPart.Position - targetPosition).Magnitude <= 4.5 then
                     if connection.Connected then connection:Disconnect() end
-                    stopMovementKeys()
+                    stopSprint()
                     return true
                 end
 
-                -- ตรวจจับการติดขัด (Stuck Detection)
-                if (rootPart.Position - lastPos).Magnitude < 0.2 then
-                    stuckTimer = stuckTimer + 0.04
+                -- ตรวจจับกรณีติดสิ่งกีดขวาง
+                if (rootPart.Position - lastPos).Magnitude < 0.15 then
+                    stuckTimer = stuckTimer + 0.05
                 else
                     stuckTimer = 0
                     lastPos = rootPart.Position
                 end
 
-                -- ถ้าติดขัดเกิน 0.5 วินาที ให้กระโดดและพยายามหลบออกข้าง
-                if stuckTimer > 0.5 then
+                -- ถ้าติดเกิน 0.6 วินาที ให้กระโดด
+                if stuckTimer > 0.6 then
                     humanoid.Jump = true
-                    -- เบี่ยงทิศทางเล็กน้อยเพื่อหลบมุมตึก/ทางแคบ
-                    rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(45), 0)
                     stuckTimer = 0
                 end
 
-                -- ป้องกันการติด Loop นานเกินไปในแต่ละ Waypoint
-                if tick() - startTime > 3.0 then
+                if tick() - startTime > 3.5 then
                     if connection.Connected then connection:Disconnect() end
                     break
                 end
@@ -294,12 +281,12 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
 
             if connection.Connected then connection:Disconnect() end
             if rootPart and (rootPart.Position - targetPosition).Magnitude <= 4.5 then 
-                stopMovementKeys()
+                stopSprint()
                 return true 
             end
         end
 
-        stopMovementKeys()
+        stopSprint()
     end
 
     return rootPart and (rootPart.Position - targetPosition).Magnitude <= 4.5
@@ -353,7 +340,7 @@ local function startDeliveryJob()
         local currentPackage = getPackageTool()
 
         if currentPackage then
-            -- 1. ถือกล่อง -> วิ่งไปส่ง
+            -- 1. มีกล่อง -> ถือกล่อง -> วิ่งไปส่ง
             equipPackage()
             
             local reachedDrop = walkToWithPathfinding(DROP_LOCATION, function() return deliveryActive end)
@@ -701,7 +688,7 @@ end
 -- ==========================================
 local Window = Fluent:CreateWindow({
     Title = "Hi Hub",
-    SubTitle = "Smart Walk & Sprint Updated",
+    SubTitle = "Hold Shift Updated",
     TabWidth = 150,
     Size = UDim2.fromOffset(560, 400),
     Acrylic = false,
@@ -784,4 +771,4 @@ Tabs.Settings:AddButton({
 })
 
 Window:SelectTab(1)
-Fluent:Notify({Title = "Hi Hub Ready", Content = "อัปเดตระบบเดินกดค้าง+วิ่ง+อ้อมสิ่งกีดขวางฉลาดขึ้นแล้วครับ!", Duration = 5})
+Fluent:Notify({Title = "Hi Hub Ready", Content = "ปรับตั้งค่าให้กด Shift ค้างไว้ตลอดการเดินเรียบร้อยครับ!", Duration = 5})
