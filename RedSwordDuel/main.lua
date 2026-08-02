@@ -605,113 +605,265 @@ local function toggleESP(state)
 end
 
 -- ==========================================
--- 6. Auto Farm (ฉาบปูน)
+-- 6. Auto Farm (ฉาบปูน) - Rayfield Version
 -- ==========================================
 local function setHighAngleCamera(enabled)
     if enabled then
         camera.CameraType = Enum.CameraType.Scriptable
+        
         if cameraConnection then cameraConnection:Disconnect() end
+        
         cameraConnection = RunService.RenderStepped:Connect(function()
-            if autoFarmActive and isCharacterAlive(player.Character) then
-                local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
-                if rootPart then
-                    local rootPos = rootPart.Position
-                    camera.CFrame = CFrame.new(rootPos + Vector3.new(0, 15, 10), rootPos)
-                end
+            if autoFarmActive and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local rootPos = player.Character.HumanoidRootPart.Position
+                local cameraOffset = Vector3.new(0, 15, 10)
+                camera.CFrame = CFrame.new(rootPos + cameraOffset, rootPos)
             end
         end)
     else
-        if cameraConnection then cameraConnection:Disconnect(); cameraConnection = nil end
+        if cameraConnection then
+            cameraConnection:Disconnect()
+            cameraConnection = nil
+        end
         camera.CameraType = Enum.CameraType.Custom
     end
+end
+
+local function setSprinting(enabled)
+    VirtualInputManager:SendKeyEvent(enabled, Enum.KeyCode.LeftShift, false, game)
 end
 
 local function getToolItem()
     local character = player.Character
     local backpack = player:FindFirstChild("Backpack")
+    
     if character then
         for _, item in ipairs(character:GetChildren()) do
-            if item:IsA("Tool") and (item.Name == ITEM_NAME or item.Name:find(ITEM_NAME)) then return item end
+            if item:IsA("Tool") and (item.Name == ITEM_NAME or item.Name:find(ITEM_NAME)) then
+                return item
+            end
         end
     end
+    
     if backpack then
         for _, item in ipairs(backpack:GetChildren()) do
-            if item:IsA("Tool") and (item.Name == ITEM_NAME or item.Name:find(ITEM_NAME)) then return item end
+            if item:IsA("Tool") and (item.Name == ITEM_NAME or item.Name:find(ITEM_NAME)) then
+                return item
+            end
         end
     end
+    
     return nil
 end
 
 local function equipItem()
     local tool = getToolItem()
     local character = player.Character
+    
     if tool and character then
         local humanoid = character:FindFirstChildWhichIsA("Humanoid")
-        if humanoid and tool.Parent ~= character then humanoid:EquipTool(tool); task.wait(0.15) end
+        if humanoid and tool.Parent ~= character then
+            humanoid:EquipTool(tool)
+            task.wait(0.2)
+        end
         return true
     end
     return false
 end
 
+local function getDetourPosition(startPos, targetPos, detourDistance)
+    detourDistance = detourDistance or math.random(8, 15)
+    
+    local midPoint = (startPos + targetPos) / 2
+    local randomDirection = math.random(1, 2) == 1 and 1 or -1
+    
+    local directionVector = (targetPos - startPos).Unit
+    local perpendicularVector = Vector3.new(-directionVector.Z, 0, directionVector.X) * randomDirection
+    
+    return midPoint + (perpendicularVector * detourDistance)
+end
+
+local function walkToWithPathfindingSimple(targetPosition)
+    local character = player.Character
+    if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("HumanoidRootPart") then 
+        return false 
+    end
+
+    local humanoid = character.Humanoid
+    local rootPart = character.HumanoidRootPart
+
+    setSprinting(true)
+
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 4,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        WaypointSpacing = 5
+    })
+
+    local success, _ = pcall(function()
+        path:ComputeAsync(rootPart.Position, targetPosition)
+    end)
+
+    if success and path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+
+        for _, waypoint in ipairs(waypoints) do
+            if not autoFarmActive then 
+                setSprinting(false)
+                return false 
+            end
+
+            setSprinting(true)
+
+            if waypoint.Action == Enum.PathWaypointAction.Jump then
+                humanoid.Jump = true
+            end
+
+            humanoid:MoveTo(waypoint.Position)
+
+            local reached = false
+            local connection
+            connection = humanoid.MoveToFinished:Connect(function()
+                reached = true
+            end)
+
+            local timeout = 0
+            while not reached and timeout < 2 do
+                if not autoFarmActive then 
+                    connection:Disconnect()
+                    setSprinting(false)
+                    return false 
+                end
+                task.wait(0.1)
+                timeout = timeout + 0.1
+            end
+            connection:Disconnect()
+
+            if (rootPart.Position - targetPosition).Magnitude <= 6 then
+                return true
+            end
+        end
+    else
+        setSprinting(true)
+        humanoid:MoveTo(targetPosition)
+        task.wait(1)
+    end
+
+    return (rootPart.Position - targetPosition).Magnitude <= 6
+end
+
 local function goBuyItem()
-    Fluent:Notify({Title = "Auto Buy", Content = "ไม่พบ '" .. ITEM_NAME .. "' กำลังไปซื้อ...", Duration = 3})
-    local reached = walkToWithPathfinding(BUY_LOCATION, function() return autoFarmActive end)
+    Fluent:Notify({Title = "Auto Buy", Content = "ไม่พบ '" .. ITEM_NAME .. "' กำลังวิ่งไปซื้อ...", Duration = 3})
+    
+    local reached = walkToWithPathfindingSimple(BUY_LOCATION)
+    
     if reached and autoFarmActive then
-        faceTarget(BUY_LOCATION); task.wait(0.2); pressEKey(); task.wait(1.2)
-        if getToolItem() then return true end
+        faceTarget(BUY_LOCATION)
+        task.wait(0.2)
+        pressEKey()
+        task.wait(1.5)
+        
+        if getToolItem() then
+            Fluent:Notify({Title = "Auto Buy Complete", Content = "ซื้อเรียบร้อย! พร้อมฟาร์มต่อ", Duration = 3})
+            return true
+        end
     end
     return false
 end
 
-local function shuffleList(t)
-    local shuffled = {}
-    for _, v in ipairs(t) do table.insert(shuffled, v) end
-    for i = #shuffled, 2, -1 do
-        local j = math.random(i); shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-    end
-    return shuffled
-end
-
 local function startAutoFarm()
-    deleteTargetMeshPart() -- ลบ MeshPart ตรงพิกัดเป้าหมายเมื่อเปิดใช้งาน
     setHighAngleCamera(true)
 
     while autoFarmActive do
-        if not isCharacterAlive(player.Character) then task.wait(1); continue end
-        if not getToolItem() then if not goBuyItem() then task.wait(1.5); continue end end
+        setSprinting(true)
+
+        if not getToolItem() then
+            local bought = goBuyItem()
+            if not bought then
+                task.wait(2)
+                continue
+            end
+        end
 
         equipItem()
+
         local foundTarget = false
         local currentTime = tick()
-        local allBricks = {}
         
-        for _, item in ipairs(Workspace:GetDescendants()) do
-            if item.Name == "brickFarm" then table.insert(allBricks, item) end
+        for item, lastTime in pairs(recentlyFarmed) do
+            if currentTime - lastTime >= 6 then
+                recentlyFarmed[item] = nil
+            end
         end
-        
-        for _, item in ipairs(shuffleList(allBricks)) do
-            if not autoFarmActive or not isCharacterAlive(player.Character) then break end
-            if recentlyFarmed[item] and (currentTime - recentlyFarmed[item] < RECENT_COOLDOWN) then continue end
 
-            local onCooldown = item:GetAttribute("OnCooldown")
-            if onCooldown == false or onCooldown == nil then
-                local targetPos = item:IsA("Model") and item.PrimaryPart and item.PrimaryPart.Position or item:IsA("BasePart") and item.Position or item:FindFirstChildWhichIsA("BasePart") and item:FindFirstChildWhichIsA("BasePart").Position
+        for _, item in ipairs(Workspace:GetDescendants()) do
+            if not autoFarmActive then break end
+            
+            if item.Name == "brickFarm" then
+                if recentlyFarmed[item] then
+                    continue
+                end
+
+                local onCooldown = item:GetAttribute("OnCooldown")
                 
-                if targetPos then
-                    foundTarget = true
-                    equipItem()
-                    local reached = walkToWithPathfinding(targetPos, function() return autoFarmActive end)
-                    if reached and autoFarmActive then
-                        faceTarget(targetPos); task.wait(0.08); interactPrompt(item)
-                        recentlyFarmed[item] = tick(); task.wait(0.15); task.wait(0.05)
-                        break
+                if onCooldown == false or onCooldown == nil then
+                    local targetPos = nil
+                    if item:IsA("Model") and item.PrimaryPart then
+                        targetPos = item.PrimaryPart.Position
+                    elseif item:IsA("BasePart") then
+                        targetPos = item.Position
+                    elseif item:FindFirstChildWhichIsA("BasePart") then
+                        targetPos = item:FindFirstChildWhichIsA("BasePart").Position
+                    end
+                    
+                    if targetPos then
+                        foundTarget = true
+                        equipItem()
+                        
+                        local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                        if rootPart then
+                            local currentPos = rootPart.Position
+                            local distance = (currentPos - targetPos).Magnitude
+                            
+                            if distance > 18 then
+                                local detourPos = getDetourPosition(currentPos, targetPos, math.random(8, 14))
+                                walkToWithPathfindingSimple(detourPos)
+                                task.wait(math.random(1, 3) / 10)
+                            end
+                        end
+                        
+                        local reached = walkToWithPathfindingSimple(targetPos)
+                        
+                        if reached and autoFarmActive then
+                            faceTarget(targetPos)
+                            task.wait(0.1)
+                            
+                            local prompt = item:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            if prompt and fireproximityprompt then
+                                fireproximityprompt(prompt)
+                            else
+                                pressEKey()
+                            end
+                            
+                            recentlyFarmed[item] = tick()
+                            
+                            task.wait(0.4)
+                            break
+                        end
                     end
                 end
             end
         end
-        if not foundTarget then task.wait(0.2) end
-        task.wait(0.02)
+        
+        if not foundTarget then
+            task.wait(0.8)
+        end
+        
+        task.wait(0.05)
     end
+    
+    setSprinting(false)
     setHighAngleCamera(false)
 end
 
@@ -757,6 +909,7 @@ FarmToggle:OnChanged(function(Value)
         recentlyFarmed = {}
         task.spawn(startAutoFarm)
     else
+        setSprinting(false)
         setHighAngleCamera(false)
     end
 end)
