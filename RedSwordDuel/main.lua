@@ -26,6 +26,9 @@ local PICKUP_LOCATION = Vector3.new(-298.8047790527344, 23.38964080810547, 36.00
 local DROP_LOCATION = Vector3.new(-621.3425903320312, 22.04998779296875, -280.3482666015625)
 local PACKAGE_NAME = "CardBoardBox"
 
+-- 🗑️ พิกัด MeshPart ที่ต้องการลบ
+local TARGET_DELETE_POS = Vector3.new(-491.0236511230469, 24.406709671020508, -63.4103889465332)
+
 -- Global Variables
 local autoFarmActive = false
 local espActive = false
@@ -63,6 +66,23 @@ local function isCharacterAlive(char)
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid or humanoid.Health <= 0 then return false end
     return true
+end
+
+-- 🗑️ ฟังก์ชันลบ MeshPart ในพิกัดที่กำหนด
+local function deleteTargetMeshPart()
+    local deletedCount = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("MeshPart") then
+            local dist = (obj.Position - TARGET_DELETE_POS).Magnitude
+            if dist <= 3.5 then -- ตรวจจับในรัศมีคลาดเคลื่อนไม่เกิน 3.5 Studs
+                obj:Destroy()
+                deletedCount = deletedCount + 1
+            end
+        end
+    end
+    if deletedCount > 0 then
+        Fluent:Notify({Title = "Hi Hub", Content = "ทำการลบ MeshPart ตรงพิกัดเป้าหมายแล้ว (" .. deletedCount .. " ชิ้น)", Duration = 3})
+    end
 end
 
 player.Idled:Connect(function()
@@ -176,7 +196,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 -- ==========================================
--- 3. MoveTo + Hold Shift System (กด Shift ค้าง)
+-- 3. MoveTo + Hold Shift System
 -- ==========================================
 local function faceTarget(targetPosition)
     local character = player.Character
@@ -210,7 +230,6 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     local humanoid = character.Humanoid
     local rootPart = character.HumanoidRootPart
 
-    -- ปรับรัศมีตัวละครเพื่อเดินอ้อมสิ่งกีดขวางให้กว้างขึ้น
     local path = PathfindingService:CreatePath({
         AgentRadius = 3.5,
         AgentHeight = 6.0,
@@ -223,7 +242,7 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     if success and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
 
-        -- 🔥 กด Shift ค้างไว้ตลอดช่วงการเดินทาง
+        -- 🔥 กด Shift ค้างไว้ตลอดการเดินทาง
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
 
         local stopSprint = function()
@@ -240,7 +259,6 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
                 humanoid.Jump = true 
             end
 
-            -- ใช้ MoveTo เดินตามคำสั่งปกติ
             humanoid:MoveTo(waypoint.Position)
             local lastPos = rootPart.Position
             local stuckTimer = 0
@@ -259,7 +277,6 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
                     return true
                 end
 
-                -- ตรวจจับกรณีติดสิ่งกีดขวาง
                 if (rootPart.Position - lastPos).Magnitude < 0.15 then
                     stuckTimer = stuckTimer + 0.05
                 else
@@ -267,7 +284,6 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
                     lastPos = rootPart.Position
                 end
 
-                -- ถ้าติดเกิน 0.6 วินาที ให้กระโดด
                 if stuckTimer > 0.6 then
                     humanoid.Jump = true
                     stuckTimer = 0
@@ -331,6 +347,8 @@ local function equipPackage()
 end
 
 local function startDeliveryJob()
+    deleteTargetMeshPart() -- ลบ MeshPart ตรงพิกัดเป้าหมายเมื่อเปิดใช้งาน
+
     while deliveryActive do
         if not isCharacterAlive(player.Character) then
             task.wait(1)
@@ -340,7 +358,6 @@ local function startDeliveryJob()
         local currentPackage = getPackageTool()
 
         if currentPackage then
-            -- 1. มีกล่อง -> ถือกล่อง -> วิ่งไปส่ง
             equipPackage()
             
             local reachedDrop = walkToWithPathfinding(DROP_LOCATION, function() return deliveryActive end)
@@ -351,7 +368,6 @@ local function startDeliveryJob()
                 task.wait(0.8)
             end
         else
-            -- 2. ไม่มีกล่อง -> วิ่งไปรับ -> กดรับ -> วิ่งไปส่ง -> กดส่ง
             local reachedPickUp = walkToWithPathfinding(PICKUP_LOCATION, function() return deliveryActive end)
             if reachedPickUp and deliveryActive then
                 faceTarget(PICKUP_LOCATION)
@@ -643,7 +659,9 @@ local function shuffleList(t)
 end
 
 local function startAutoFarm()
+    deleteTargetMeshPart() -- ลบ MeshPart ตรงพิกัดเป้าหมายเมื่อเปิดใช้งาน
     setHighAngleCamera(true)
+
     while autoFarmActive do
         if not isCharacterAlive(player.Character) then task.wait(1); continue end
         if not getToolItem() then if not goBuyItem() then task.wait(1.5); continue end end
@@ -688,7 +706,7 @@ end
 -- ==========================================
 local Window = Fluent:CreateWindow({
     Title = "Hi Hub",
-    SubTitle = "Hold Shift Updated",
+    SubTitle = "Delete Target MeshPart Added",
     TabWidth = 150,
     Size = UDim2.fromOffset(560, 400),
     Acrylic = false,
@@ -771,4 +789,4 @@ Tabs.Settings:AddButton({
 })
 
 Window:SelectTab(1)
-Fluent:Notify({Title = "Hi Hub Ready", Content = "ปรับตั้งค่าให้กด Shift ค้างไว้ตลอดการเดินเรียบร้อยครับ!", Duration = 5})
+Fluent:Notify({Title = "Hi Hub Ready", Content = "เพิ่มระบบลบ MeshPart ในพิกัดเป้าหมายเรียบร้อยครับ!", Duration = 5})
