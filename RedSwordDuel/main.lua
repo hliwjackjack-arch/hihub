@@ -788,5 +788,19 @@ Tabs.Settings:AddButton({
     end
 })
 
+-- โค้ดส่วนสำหรับการลบ MeshPart ตามพิกัดที่กำหนด
+
+local targetPosition = Vector3.new(-491.0236511230469, 24.406709671020508, -63.4103889465332)
+local tolerance = 1 -- ระยะความคลาดเคลื่อนที่อนุญาต (หน่วยเป็น Studs)
+
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if obj:IsA("MeshPart") then
+        if (obj.Position - targetPosition).Magnitude <= tolerance then
+            obj:Destroy()
+            print("ลบ MeshPart สำเร็จที่พิกัด:", obj.Position)
+        end
+    end
+end
+
 Window:SelectTab(1)
 Fluent:Notify({Title = "Hi Hub Ready", Content = "เพิ่มระบบลบ MeshPart ในพิกัดเป้าหมายเรียบร้อยครับ!", Duration = 5})
