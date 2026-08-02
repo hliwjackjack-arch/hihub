@@ -209,7 +209,7 @@ end
 
 local function pressEKey()
     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-    task.wait(0.12)
+    task.wait(0.35)
     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
 end
 
@@ -242,11 +242,23 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
     if success and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
 
-        -- 🔥 กด Shift ค้างไว้ตลอดการเดินทาง
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+        -- 🔥 ใช้ MoveTowards สำหรับการเดินทางโดยตรง
+        local moveConnection = nil
+        local function startMoving(direction)
+            if moveConnection then moveConnection:Disconnect() end
+            moveConnection = RunService.Heartbeat:Connect(function()
+                if humanoid and isCharacterAlive(character) then
+                    humanoid:Move(direction, false)
+                end
+            end)
+        end
 
         local stopSprint = function()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+            if moveConnection then
+                moveConnection:Disconnect()
+                moveConnection = nil
+            end
+            if humanoid then humanoid:Move(Vector3.new(0, 0, 0), false) end
         end
 
         for _, waypoint in ipairs(waypoints) do
@@ -259,6 +271,8 @@ local function walkToWithPathfinding(targetPosition, activeFlagCheck)
                 humanoid.Jump = true 
             end
 
+            local directionToWaypoint = (waypoint.Position - rootPart.Position).Unit
+            startMoving(directionToWaypoint)
             humanoid:MoveTo(waypoint.Position)
             local lastPos = rootPart.Position
             local stuckTimer = 0
